@@ -68,6 +68,9 @@ dataFiles = [f for f in os.listdir(dataPath
 
 dataFiles.sort()
 
+startIndex = dataFiles.index('03-22-2020.csv')
+dataFiles = dataFiles[startIndex:]
+
 os.chdir(dataPath)
 
 influxFields = ['Confirmed', 'Deaths', 'Recovered',
@@ -75,6 +78,12 @@ influxFields = ['Confirmed', 'Deaths', 'Recovered',
 
 influxIgnoreTags = ['FIPS', 'Lat', 'Long_', 'Latitude',
                     'Longitude', 'Combined_Key', 'Last_Update', 'Country_Region']
+
+lastValues = {}
+lastStateTimestamps = {}
+lastStateDiffs = {}
+
+iterationStart = datetime.datetime.utcnow()
 
 for dataFile in dataFiles:
     with open(dataFile, newline='', encoding='utf-8-sig') as csvfile:
@@ -97,8 +106,37 @@ for dataFile in dataFiles:
                             if tfn not in influxFields and tfn not in influxIgnoreTags:
                                 pointTags[tfn] = row[tfn]
 
-                        value = row[fn]
+                        value = float(row[fn]) if len(row[fn]) else 0.0
                         lastUpdate = row['Last_Update']
+
+                        state = row['Province_State']
+                        county = row['Admin2']
+
+                        if state not in lastValues:
+                            lastValues[state] = {}
+
+                        if county not in lastValues[state]:
+                            lastValues[state][county] = {}
+
+                        if fn not in lastValues[state][county]:
+                            lastValues[state][county][fn] = 0
+
+                        lastValue = lastValues[state][county][fn]
+                        lastValues[state][county][fn] = value
+
+                        diff = value - lastValue
+
+
+                        if state not in lastStateDiffs:
+                            lastStateDiffs[state] = {}
+
+                        if county not in lastStateDiffs[state]:
+                            lastStateDiffs[state][county] = {}
+
+                        if fn not in lastStateDiffs[state][county]:
+                            lastStateDiffs[state][county][fn] = 0
+
+                        lastStateDiffs[state][county][fn] = diff
 
                         try:
                             timestamp = datetime.datetime.fromisoformat(
@@ -111,15 +149,47 @@ for dataFile in dataFiles:
                                 timestamp = datetime.datetime.strptime(
                                     lastUpdate, '%m/%d/%y %H:%M')
 
-                        point = {
+                        points.append({
+                            'measurement': 'total',
+                            'tags': pointTags,
+                            'fields': {fn: value},
+                            'time': timestamp
+                        })
+
+                        points.append({
                             'measurement': 'daily',
                             'tags': pointTags,
-                            'fields': {fn: float(value) if len(value) else 0.0},
+                            'fields': {fn: diff},
                             'time': timestamp
-                        }
+                        })
 
-                        points.append(point)
+                        lastStateTimestamps[state] = timestamp
 
-        logger.info('%s : Writing %d points to influx' %
-                    (dataFile, len(points)))
+        # Calculate State totals...
+        for state in lastStateDiffs:
+            totals = {}
+            for county in lastStateDiffs[state]:
+                for metric in lastStateDiffs[state][county]:
+                    if metric not in totals:
+                        totals[metric] = 0
+                    totals[metric] += lastStateDiffs[state][county][metric]
+
+            for total in totals:
+                points.append({
+                    'measurement': 'daily',
+                    'tags': {
+                        'Province_State': state,
+                        'Admin2': 'calculated_total'
+                    },
+                    'fields': {total: totals[total]},
+                    'time': lastStateTimestamps[state]
+                })
+
         writeClient.write(influxBucket, influxOrg, points)
+
+        dTime = datetime.datetime.utcnow() - iterationStart
+
+        logger.info('%s : Writing %d points to influx took %d ms' %
+                    (dataFile, len(points), dTime.total_seconds() * 1000))
+        
+        iterationStart = datetime.datetime.utcnow()
