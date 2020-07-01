@@ -8,4 +8,4 @@ python3 -m venv $OUTDIR
 source "$OUTDIR/bin/activate"
 
 pip3 install coloredlogs
-pip install influxdb-client
+pip3 install influxdb-client

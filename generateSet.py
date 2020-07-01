@@ -58,8 +58,8 @@ deleteClient.delete(
     start=startDate,
     stop=endDate,
     predicate='',
-    bucket_id='05eef5edbf2e7001',
-    org_id='05eef5edbf2e7000'
+    bucket_id=influxAuth['bucket_id'],
+    org_id=influxAuth['org_id']
 )
 
 
